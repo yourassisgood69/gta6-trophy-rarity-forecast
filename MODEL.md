@@ -30,10 +30,15 @@ only. Log-time is the right clock because launch dynamics are fastest at
 first and slow down. Distinct reads matter because Exophase refreshes in
 jumps: the long flat stretches between refreshes are one observation, not
 many (a read that only lacks a trophy counts as the same page, not a new
-state). Reads are weighted by recency (24 h half-life). The slope is shrunk
-toward its tier's mean slope (platinum / gold / silver / bronze,
-pseudo-count 4), so a trophy with a noisy history borrows strength from its
-tier. The median is anchored at the last read:
+state). Reads are weighted by recency (12 h half-life), so the trend is set
+by the most recent reads, when the balance of progression and dilution is
+closest to the balance the forecast extrapolates. Each trophy keeps its own
+slope: there is no shrinkage to a tier mean. The tiers pool trophies whose
+true progression speeds differ wildly (a 15-minute early trophy and a
+300-hour grind are both bronze), so shrinking toward the tier mean only
+biases every slope, and the final case's history is rich enough -- dozens
+of distinct reads per trophy -- that each slope is well identified on its
+own. The median is anchored at the last read:
 
 ```
 median_logit = logit(last rate) + slope * (x_target - x_last)
@@ -57,10 +62,14 @@ matters, because the extrapolated move is tiny.
 
 The spread is the regression's prediction standard error (residual variance
 plus slope uncertainty, which grows with extrapolation distance), scaled by
-0.9, floored at 0.25 and capped at 1.2 logit units. Quantiles are
+1.25, floored at 0.25 and capped at 1.2 logit units. Quantiles are
 `median + z_tau * sigma` on the logit scale, `z = (-1.645, -0.674, 0, 0.674,
-1.645)`, mapped back to percent. On the synthetic launch weeks this gives
-about 90% coverage of the 5%–95% band, as a calibrated forecast should.
+1.645)`, mapped back to percent. The scale 1.25 is calibration, not caution:
+at 0.9 the 5%-95% band covered only about 80% of answers on the synthetic
+final weeks, where a calibrated forecast covers about 90%; 1.25 brings
+coverage to about 0.88 without costing accuracy anywhere. On the synthetic
+launch weeks this gives about 88% coverage of the 5%-95% band, close to
+the calibrated 90%.
 
 ## Special cases
 
@@ -80,17 +89,46 @@ where rates rise monotonically toward saturation, one where earners follow a
 convolution of the owner inflow with a time-to-earn distribution, giving the
 real dilution dip then recovery; three player-growth shapes and three
 progression speeds each, several seeds). Mean pinball loss on the logit
-scale, lower is better:
+scale, lower is better, on the base shape of each world, seeds 0-4:
 
 | world | this forecaster | house curve baseline | house baseline |
 |---|---|---|---|
-| convolution (dilution) | **0.29** | 0.40 | 0.84 |
-| monotone saturation | **0.09** | 0.27 | 0.33 |
+| convolution (dilution) | **0.28** | 0.42 | 0.84 |
+| monotone saturation | **0.07** | 0.26 | 0.33 |
 
 The house baselines are the ones the kit documents (flat median with a
 random-walk spread, and a logit-linear trend on the last 24 h). The
-forecaster beats both in every world tested, with a worst case of 0.39
-against the curve baseline's worst of 0.60.
+forecaster beats both in every world tested.
+
+Round 2 was audited against round 1 on the same cases before it was
+submitted. The audit changed three things, each verified separately and
+then together: tier shrinkage was removed (each trophy keeps its own
+slope), the recency half-life went from 24 h to 12 h, and the spread
+scale went from 0.9 to 1.25. Rejected on the same backtests: damping
+0.75 instead of 0.7 (wins when owner inflow saturates early, loses badly
+when it stays strong late), a longer trend window, fitted-value anchoring,
+and an earners/players decomposition blend (all worse overall or fragile
+when Exophase refreshes slowly). Measured on identical cases, mean pinball
+loss, round 1 -> round 2:
+
+| suite (cases) | round 1 | round 2 |
+|---|---|---|
+| final-like, tune seeds 0-4 (60) | 0.227 | 0.199 |
+| final-like, held-out seeds 5-9 (60) | 0.219 | 0.189 |
+| stress: late-surge inflow + slow (6-10 h) refresh (45) | 0.315 | 0.273 |
+| all final-like (120) | 0.223 | 0.194 |
+
+Coverage of the 5%-95% band improved from about 0.80 to about 0.88
+(nominal 0.90), median absolute logit error from 0.23 to 0.16, and the
+worst case from 0.39 to 0.38. On synthetic practice cases (stale page,
+refresh jump) round 2 scores 0.598 against round 1's 0.603: the changes
+do not hurt the practice score. The audit also found and fixed a
+robustness bug: a read whose `rates` list is shorter than the trophy
+count crashed round 1 with an IndexError, invalidating the whole run.
+Round 2 bounds-checks every rate access and, if a case still cannot be
+modelled, writes a valid fallback forecast (last rates with the house
+baseline's spread) instead of crashing, so one malformed case can never
+take the entry out of the prizes.
 
 ## What it does not do
 
@@ -99,3 +137,6 @@ against the curve baseline's worst of 0.60.
 - No model calls, no randomness, no installed packages. Runs in ~0.05 s on
   the practice cases and ~0.04 s on a 359-read final-shaped case, far inside
   the 8 s limit, and writes byte-identical output on repeat runs.
+- If a case is malformed in a way the model cannot handle, the program
+  writes a valid fallback forecast (last rates, house-baseline spread)
+  instead of crashing, so the run stays valid.
